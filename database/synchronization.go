@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/polyglottis/platform/content"
+	"github.com/polyglottis/platform/language"
 )
 
 type lock struct {
@@ -32,8 +33,8 @@ func (db *DB) withExtractLock_NoCheck(id content.ExtractId, todo func() error) e
 	return todo()
 }
 
-func (db *DB) withFlavorLock(extractId content.ExtractId, flavorId content.FlavorId, todo func() error) error {
-	exists, err := db.FlavorExists(extractId, flavorId)
+func (db *DB) withFlavorLock(extractId content.ExtractId, lang language.Code, flavorType content.FlavorType, flavorId content.FlavorId, todo func() error) error {
+	exists, err := db.FlavorExists(extractId, lang, flavorType, flavorId)
 	if err != nil {
 		return err
 	} else if !exists {

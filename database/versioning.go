@@ -9,6 +9,7 @@ import (
 
 	"github.com/polyglottis/platform/content"
 	"github.com/polyglottis/platform/database"
+	"github.com/polyglottis/platform/language"
 	"github.com/polyglottis/platform/user"
 )
 
@@ -64,7 +65,7 @@ func versionedValues(values []interface{}, author user.Name, version int, t cont
 func (tx *Tx) InsertVersionedFlavor(author user.Name, f *content.Flavor) error {
 	extractId := string(f.ExtractId)
 	flavorId := int(f.Id)
-	err := tx.InsertVersioned("flavors", author, extractId, flavorId, f.Summary, string(f.Type), string(f.Language), f.LanguageComment)
+	err := tx.InsertVersioned("flavors", author, extractId, string(f.Language), string(f.Type), flavorId, f.LanguageComment, f.Summary)
 	if err != nil {
 		return err
 	}
@@ -73,7 +74,7 @@ func (tx *Tx) InsertVersionedFlavor(author user.Name, f *content.Flavor) error {
 		for uId, unit := range block {
 			unit.BlockId = content.BlockId(bId + 1)
 			unit.Id = content.UnitId(uId + 1)
-			err = tx.InsertVersioned("units", author, extractId, flavorId, bId+1, uId+1, string(unit.ContentType), unit.Content)
+			err = tx.InsertVersioned("units", author, extractId, string(f.Language), string(f.Type), flavorId, bId+1, uId+1, string(unit.ContentType), unit.Content)
 			if err != nil {
 				return err
 			}
@@ -84,16 +85,14 @@ func (tx *Tx) InsertVersionedFlavor(author user.Name, f *content.Flavor) error {
 
 type extractUpdate struct {
 	// Order and field names must coincide with DB columns!
-	ExtractType string
 	Slug        string
+	ExtractType string
 	Metadata    []byte
 }
 
 type flavorUpdate struct {
 	// Order and field names must coincide with DB columns!
 	Summary         string
-	FlavorType      string
-	Language        string
 	LanguageComment string
 }
 
@@ -105,30 +104,43 @@ type unitUpdate struct {
 
 type primaryKey struct {
 	// Order and field names must coincide with DB columns!
-	ExtractId string
-	FlavorId  int
-	BlockId   int
-	UnitId    int
+	ExtractId  string
+	Language   string
+	FlavorType string
+	FlavorId   int
+	BlockId    int
+	UnitId     int
 }
 
 func (pk *primaryKey) Sql() string {
-	list := []string{"extractId", "flavorId", "blockId", "unitId"}
+	list := []string{"extractId", "language", "flavorType", "flavorId", "blockId", "unitId"}
 	switch {
-	case pk.FlavorId == 0:
-		list = list[:1]
-	case pk.BlockId == 0 || pk.UnitId == 0:
-		list = list[:2]
+	case pk.isExtract():
+		list = list[:pk.extractLength()]
+	case pk.isFlavor():
+		list = list[:pk.flavorLength()]
 	}
 	return strings.Join(list, "=? and ") + "=?"
 }
 
+func (pk *primaryKey) isExtract() bool {
+	return len(pk.Language) == 0 || len(pk.FlavorType) == 0 || pk.FlavorId == 0
+}
+
+func (pk *primaryKey) isFlavor() bool {
+	return pk.BlockId == 0 || pk.UnitId == 0
+}
+
+func (pk *primaryKey) extractLength() int { return 1 }
+func (pk *primaryKey) flavorLength() int  { return 4 }
+
 func (pk *primaryKey) Values() []interface{} {
-	list := []interface{}{pk.ExtractId, pk.FlavorId, pk.BlockId, pk.UnitId}
+	list := []interface{}{pk.ExtractId, pk.Language, pk.FlavorType, pk.FlavorId, pk.BlockId, pk.UnitId}
 	switch {
-	case pk.FlavorId == 0:
-		return list[:1]
-	case pk.BlockId == 0 || pk.UnitId == 0:
-		return list[:2]
+	case pk.isExtract():
+		return list[:pk.extractLength()]
+	case pk.isFlavor():
+		return list[:pk.flavorLength()]
 	}
 	return list
 }
@@ -139,19 +151,23 @@ func newExtractId(id content.ExtractId) *primaryKey {
 	}
 }
 
-func newFlavorId(extractId content.ExtractId, flavorId content.FlavorId) *primaryKey {
+func newFlavorId(extractId content.ExtractId, lang language.Code, flavorType content.FlavorType, flavorId content.FlavorId) *primaryKey {
 	return &primaryKey{
-		ExtractId: string(extractId),
-		FlavorId:  int(flavorId),
+		ExtractId:  string(extractId),
+		Language:   string(lang),
+		FlavorType: string(flavorType),
+		FlavorId:   int(flavorId),
 	}
 }
 
-func newUnitId(extractId content.ExtractId, flavorId content.FlavorId, blockId content.BlockId, unitId content.UnitId) *primaryKey {
+func newUnitId(extractId content.ExtractId, lang language.Code, flavorType content.FlavorType, flavorId content.FlavorId, blockId content.BlockId, unitId content.UnitId) *primaryKey {
 	return &primaryKey{
-		ExtractId: string(extractId),
-		FlavorId:  int(flavorId),
-		BlockId:   int(blockId),
-		UnitId:    int(unitId),
+		ExtractId:  string(extractId),
+		Language:   string(lang),
+		FlavorType: string(flavorType),
+		FlavorId:   int(flavorId),
+		BlockId:    int(blockId),
+		UnitId:     int(unitId),
 	}
 }
 

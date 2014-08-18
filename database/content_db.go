@@ -45,10 +45,10 @@ func Open(file string) (*DB, error) {
 			Type:       "text",
 			Constraint: "not null",
 		}, {
-			Field: "extractType",
+			Field: "slug",
 			Type:  "text",
 		}, {
-			Field: "slug",
+			Field: "extractType",
 			Type:  "text",
 		}, {
 			Field: "metadata",
@@ -63,28 +63,34 @@ func Open(file string) (*DB, error) {
 			Field: "extractId",
 			Type:  "text",
 		}, {
-			Field: "flavorId",
-			Type:  "integer",
-		}, {
-			Field: "summary",
+			Field: "language",
 			Type:  "text",
 		}, {
 			Field: "flavorType",
 			Type:  "text",
 		}, {
-			Field: "language",
-			Type:  "text",
+			Field: "flavorId",
+			Type:  "integer",
 		}, {
 			Field: "languageComment",
 			Type:  "text",
+		}, {
+			Field: "summary",
+			Type:  "text",
 		}},
-		PrimaryKey: []string{"extractId", "flavorId"},
+		PrimaryKey: []string{"extractId", "language", "flavorType", "flavorId"},
 	})
 
 	schema = addVersionedTable(schema, &database.Table{
 		Name: "units",
 		Columns: database.Columns{{
 			Field: "extractId",
+			Type:  "text",
+		}, {
+			Field: "language",
+			Type:  "text",
+		}, {
+			Field: "flavorType",
 			Type:  "text",
 		}, {
 			Field: "flavorId",
@@ -102,7 +108,7 @@ func Open(file string) (*DB, error) {
 			Field: "content",
 			Type:  "text",
 		}},
-		PrimaryKey: []string{"extractId", "flavorId", "blockId", "unitId"},
+		PrimaryKey: []string{"extractId", "language", "flavorType", "flavorId", "blockId", "unitId"},
 	})
 
 	contentDB, err := database.Create(db, schema)
@@ -135,6 +141,9 @@ func (db *DB) NewExtract(author user.Name, e *content.Extract) error {
 	if len(author) == 0 {
 		return fmt.Errorf("Author name cannot be empty")
 	}
+	if !content.ValidExtractType(e.Type) {
+		return content.ErrInvalidInput
+	}
 
 	metadata, err := json.Marshal(e.Metadata)
 	if err != nil {
@@ -161,19 +170,29 @@ func (db *DB) NewExtract(author user.Name, e *content.Extract) error {
 				return err
 			}
 
-			err = tx.InsertVersioned("extracts", author, strId, string(e.Type), e.UrlSlug, metadata)
+			err = tx.InsertVersioned("extracts", author, strId, e.UrlSlug, string(e.Type), metadata)
 			if err != nil {
 				tx.Rollback()
 				return err
 			}
 			e.SetId(id)
 
-			for fIdx, f := range e.Flavors {
-				f.SetId(content.FlavorId(fIdx + 1))
-				err = tx.InsertVersionedFlavor(author, f)
-				if err != nil {
-					tx.Rollback()
-					return err
+			for lang, fByType := range e.Flavors {
+				for fType, flavors := range fByType {
+					if !content.ValidFlavorType(fType) {
+						tx.Rollback()
+						return content.ErrInvalidInput
+					}
+					for fIdx, f := range flavors {
+						f.SetLanguage(lang)
+						f.SetType(fType)
+						f.SetId(content.FlavorId(fIdx + 1))
+						err = tx.InsertVersionedFlavor(author, f)
+						if err != nil {
+							tx.Rollback()
+							return err
+						}
+					}
 				}
 			}
 			return tx.Commit()
@@ -193,6 +212,12 @@ func (db *DB) NewFlavor(author user.Name, f *content.Flavor) error {
 	if len(author) == 0 {
 		return fmt.Errorf("Author name cannot be empty")
 	}
+	if !content.ValidFlavorType(f.Type) {
+		return fmt.Errorf("Invalid flavor type")
+	}
+	if len(f.Language) == 0 {
+		return fmt.Errorf("Missing language field")
+	}
 
 	return db.withExtractLock(f.ExtractId, func() error {
 		tx, err := db.Begin()
@@ -200,13 +225,28 @@ func (db *DB) NewFlavor(author user.Name, f *content.Flavor) error {
 			return err
 		}
 
-		max, err := tx.QueryInt("select max(flavorId) from flavors where extractId=?", string(f.ExtractId))
+		var max sql.NullInt64
+		err = tx.QueryRow("select max(flavorId) from flavors where extractId=? and language=? and flavorType=?",
+			string(f.ExtractId), string(f.Language), string(f.Type)).Scan(&max)
 		if err != nil {
 			tx.Rollback()
 			return err
 		}
+		var m int64
+		if max.Valid {
+			val, err := max.Value()
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+			var ok bool
+			if m, ok = val.(int64); !ok {
+				tx.Rollback()
+				return fmt.Errorf("Unable to parse integer value")
+			}
+		}
 
-		f.SetId(content.FlavorId(max + 1))
+		f.SetId(content.FlavorId(m + 1))
 		err = tx.InsertVersionedFlavor(author, f)
 		if err != nil {
 			tx.Rollback()
@@ -224,8 +264,9 @@ func (db *DB) ExtractExists(id content.ExtractId) (bool, error) {
 	return db.db.QueryNonZero("select count(1) from extracts where extractId=?", string(id))
 }
 
-func (db *DB) FlavorExists(extractId content.ExtractId, flavorId content.FlavorId) (bool, error) {
-	return db.db.QueryNonZero("select count(1) from flavors where extractId=? and flavorId=?", string(extractId), int(flavorId))
+func (db *DB) FlavorExists(extractId content.ExtractId, lang language.Code, flavorType content.FlavorType, flavorId content.FlavorId) (bool, error) {
+	return db.db.QueryNonZero("select count(1) from flavors where extractId=? and language=? and flavorType=? and flavorId=?",
+		string(extractId), string(lang), string(flavorType), int(flavorId))
 }
 
 func (db *DB) GetExtract(id content.ExtractId) (*content.Extract, error) {
@@ -239,16 +280,16 @@ func (db *DB) GetExtract(id content.ExtractId) (*content.Extract, error) {
 	default:
 	}
 
-	rows, err := db.db.Query("select * from flavors where extractId=? order by extractId, flavorId", strId)
+	rows, err := db.db.Query("select * from flavors where extractId=? order by extractId, language, flavorType, flavorId", strId)
 	if err != nil {
 		return nil, err
 	}
-	e.Flavors, err = db.scanFlavors(rows)
+	e.Flavors, err = db.scanFlavorMap(rows)
 	if err != nil {
 		return nil, err
 	}
 
-	rows, err = db.db.Query("select * from units where extractId=? order by extractId, flavorId, blockId, unitId", strId)
+	rows, err = db.db.Query("select * from units where extractId=? order by extractId, language, flavorType, flavorId, blockId, unitId", strId)
 	if err != nil {
 		return nil, err
 	}
@@ -259,16 +300,26 @@ func (db *DB) GetExtract(id content.ExtractId) (*content.Extract, error) {
 
 	// Group units and assign them to the right flavor.
 	groupedUnits := db.groupSortedUnits(units)
-	flavorMap := make(map[content.FlavorId]int)
-	for i, f := range e.Flavors {
-		flavorMap[f.Id] = i
-	}
 	for _, group := range groupedUnits {
-		fId := group[0][0].FlavorId
-		if i, ok := flavorMap[fId]; ok {
-			e.Flavors[i].Blocks = group
+		lang := group[0][0].Language
+		if fByType, ok := e.Flavors[lang]; ok {
+			fType := group[0][0].FlavorType
+			if flavors, ok := fByType[fType]; ok {
+				fId := group[0][0].FlavorId
+				flavorMap := make(map[content.FlavorId]int)
+				for i, f := range flavors {
+					flavorMap[f.Id] = i
+				}
+				if i, ok := flavorMap[fId]; ok {
+					flavors[i].Blocks = group
+				} else {
+					log.Printf("ERROR: Units associated to missing flavor: %s/%s/%s/%d", strId, string(lang), string(fType), fId)
+				}
+			} else {
+				log.Printf("ERROR: Units associated to missing flavor: %s/%s/%s", strId, string(lang), string(fType))
+			}
 		} else {
-			log.Printf("ERROR: Units associated to missing flavor: %s/%d", strId, fId)
+			log.Printf("ERROR: Units associated to missing flavor: %s/%s", strId, string(lang))
 		}
 	}
 
@@ -283,7 +334,7 @@ func (db *DB) scanExtract(s scanner) (*content.Extract, error) {
 	e := new(content.Extract)
 	var id, eType string
 	var metadata []byte
-	err := s.Scan(&id, &eType, &e.UrlSlug, &metadata)
+	err := s.Scan(&id, &e.UrlSlug, &eType, &metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -311,18 +362,33 @@ func (db *DB) scanFlavors(rows *sql.Rows) ([]*content.Flavor, error) {
 	return flavors, nil
 }
 
+func (db *DB) scanFlavorMap(rows *sql.Rows) (content.FlavorMap, error) {
+	flavors, err := db.scanFlavors(rows)
+	if err != nil {
+		return nil, err
+	}
+	m := make(content.FlavorMap)
+	for _, f := range flavors {
+		if _, ok := m[f.Language]; !ok {
+			m[f.Language] = make(content.FlavorByType)
+		}
+		m[f.Language][f.Type] = append(m[f.Language][f.Type], f)
+	}
+	return m, nil
+}
+
 func (db *DB) scanFlavor(s scanner) (*content.Flavor, error) {
 	f := new(content.Flavor)
-	var eId, fType, lang string
+	var eId, lang, fType string
 	var fId int
-	err := s.Scan(&eId, &fId, &f.Summary, &fType, &lang, &f.LanguageComment)
+	err := s.Scan(&eId, &lang, &fType, &fId, &f.LanguageComment, &f.Summary)
 	if err != nil {
 		return nil, err
 	}
 	f.ExtractId = content.ExtractId(eId)
-	f.Id = content.FlavorId(fId)
-	f.Type = content.FlavorType(fType)
 	f.Language = language.Code(lang)
+	f.Type = content.FlavorType(fType)
+	f.Id = content.FlavorId(fId)
 	return f, nil
 }
 
@@ -343,13 +409,15 @@ func (db *DB) scanUnits(rows *sql.Rows) ([]*content.Unit, error) {
 
 func (db *DB) scanUnit(s scanner) (*content.Unit, error) {
 	u := new(content.Unit)
-	var eId, cType string
+	var eId, lang, fType, cType string
 	var fId, bId, uId int
-	err := s.Scan(&eId, &fId, &bId, &uId, &cType, &u.Content)
+	err := s.Scan(&eId, &lang, &fType, &fId, &bId, &uId, &cType, &u.Content)
 	if err != nil {
 		return nil, err
 	}
 	u.ExtractId = content.ExtractId(eId)
+	u.Language = language.Code(lang)
+	u.FlavorType = content.FlavorType(fType)
 	u.FlavorId = content.FlavorId(fId)
 	u.BlockId = content.BlockId(bId)
 	u.Id = content.UnitId(uId)
