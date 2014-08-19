@@ -144,6 +144,9 @@ func (db *DB) NewExtract(author user.Name, e *content.Extract) error {
 	if !content.ValidExtractType(e.Type) {
 		return content.ErrInvalidInput
 	}
+	if !content.ValidSlug(e.UrlSlug) {
+		return content.ErrInvalidInput
+	}
 
 	metadata, err := json.Marshal(e.Metadata)
 	if err != nil {
