@@ -144,7 +144,7 @@ func (db *DB) NewExtract(author user.Name, e *content.Extract) error {
 	if !content.ValidExtractType(e.Type) {
 		return content.ErrInvalidInput
 	}
-	if !content.ValidSlug(e.UrlSlug) {
+	if valid, _ := content.ValidSlug(e.UrlSlug); !valid {
 		return content.ErrInvalidInput
 	}
 
