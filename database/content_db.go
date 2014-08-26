@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3" // driver import
 
@@ -428,15 +429,19 @@ func (db *DB) scanUnit(s scanner) (*content.Unit, error) {
 	return u, nil
 }
 
-// groupSortedUnits takes a sorted slice of units (sorted by FlavorId, BlockId, UnitId) for one extract,
-// and returns the same units grouped by Flavor and Block
+// groupSortedUnits takes a sorted slice of units (sorted by Language, FlavorType, FlavorId, BlockId, UnitId) for one extract,
+// and returns the same units grouped by Language, FlavorType, FlavorId and Block
 func (db *DB) groupSortedUnits(units []*content.Unit) []content.BlockSlice {
 	groups := make([]content.BlockSlice, 0)
+	var lastLanguage language.Code
+	var lastFlavorType content.FlavorType
 	lastFlavorId := content.FlavorId(-1)
 	lastBlockId := content.BlockId(-1)
 	for _, u := range units {
-		if u.FlavorId != lastFlavorId {
+		if u.Language != lastLanguage || u.FlavorType != lastFlavorType || u.FlavorId != lastFlavorId {
 			groups = append(groups, make(content.BlockSlice, 0))
+			lastLanguage = u.Language
+			lastFlavorType = u.FlavorType
 			lastFlavorId = u.FlavorId
 		}
 		flavorIdx := len(groups) - 1
@@ -462,6 +467,7 @@ func (db *DB) SlugToIdMap() (map[string]content.ExtractId, error) {
 		if err != nil {
 			return nil, err
 		}
+		slug = strings.ToLower(slug)
 		if otherId, wasThere := m[slug]; wasThere {
 			log.Println("Error: slug used by both %v and %v", id, otherId)
 		}

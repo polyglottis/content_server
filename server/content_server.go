@@ -3,6 +3,7 @@ package server
 
 import (
 	"log"
+	"strings"
 	"sync"
 
 	"github.com/polyglottis/content_server/database"
@@ -65,7 +66,7 @@ func (s *Server) UpdateExtract(author user.Name, e *content.Extract) error {
 func (s *Server) GetExtractId(slug string) (content.ExtractId, error) {
 	var id content.ExtractId
 	s.withSlugToId(func(m map[string]content.ExtractId) {
-		id = m[slug]
+		id = m[strings.ToLower(slug)]
 	})
 	if len(id) == 0 {
 		return "", content.ErrNotFound
