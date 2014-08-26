@@ -478,27 +478,3 @@ func (db *DB) SlugToIdMap() (map[string]content.ExtractId, error) {
 	}
 	return m, nil
 }
-
-func (db *DB) ExtractList() ([]*content.Extract, error) {
-	rows, err := db.db.Query("select extractId, extractType, slug from extracts")
-	if err != nil {
-		return nil, err
-	}
-	list := make([]*content.Extract, 0)
-	for rows.Next() {
-		var id, eType, slug string
-		err := rows.Scan(&id, &eType, &slug)
-		if err != nil {
-			return nil, err
-		}
-		list = append(list, &content.Extract{
-			Id:      content.ExtractId(id),
-			Type:    content.ExtractType(eType),
-			UrlSlug: slug,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return list, nil
-}
